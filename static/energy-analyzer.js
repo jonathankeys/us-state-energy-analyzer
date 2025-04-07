@@ -91,11 +91,11 @@ const update_state_summaries = (data, id) => {
             if (res.statusCode === 200) {
                 element.innerHTML = res.info;
             } else {
-                element.innerHTML = 'Error'
+                element.innerHTML = '<em data-tooltip="Bedrock model being used has a 5 request per minute limit">Error</em>'
             }
         })
         .catch(error => {
-            element.innerHTML = 'Error'
+            element.innerHTML = '<em data-tooltip="Bedrock model being used has a 5 request per minute limit">Error</em>'
         });
 }
 
