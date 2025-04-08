@@ -72,27 +72,22 @@ const fips_to_state_abbr = {
 
 let current_state = 'United States';
 
-const update_state_summaries = (data, id) => {
-    data = {
-        ...data,
-        id
-    }
-    const element = document.getElementById(id);
+const update_state_summaries = (state_abbr, invocation) => {
+    const element = document.getElementById(invocation);
     element.innerHTML = '<progress />'
-    return fetch(`https://api.jonathan-keys.com/state`, {
-        method: 'POST',
+    const params = new URLSearchParams({
+        invocation: invocation,
+        state: state_abbr
+    });
+    return fetch(`https://api.jonathan-keys.com/?${params}`, {
+        method: 'GET',
         headers: {
             'Content-Type': 'application/json'
-        },
-        body: JSON.stringify(data)
+        }
     })
         .then(res => res.json())
         .then(res => {
-            if (res.statusCode === 200) {
-                element.innerHTML = res.info;
-            } else {
-                element.innerHTML = '<em data-tooltip="Bedrock model being used has a 5 request per minute limit">Error</em>'
-            }
+            element.innerHTML = res.info;
         })
         .catch(error => {
             element.innerHTML = '<em data-tooltip="Bedrock model being used has a 5 request per minute limit">Error</em>'
@@ -158,8 +153,8 @@ const update_state_section = async (state_name, state_abbr, json_data) => {
         data
     };
 
-    update_state_summaries(payload, 'summary');
-    update_state_summaries(payload, 'recommendation');
+    update_state_summaries(state_abbr, 'summarize');
+    await update_state_summaries(state_abbr, 'recommend');
 
     header_element.setAttribute('aria-busy', false);
 }

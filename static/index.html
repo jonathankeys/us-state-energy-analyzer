@@ -63,7 +63,7 @@
                             <strong>Visualization:</strong> Built using <code><a href="https://d3js.org/">D3</a></code> and the <code><a href="https://d3-geomap.github.io/">d3-geomap</a></code> library to render geospatial visualizations of state-level energy data.
                         </li>
                         <li>
-                            <strong>AI Summaries & Recommendations:</strong> Generated using two AWS Bedrock Agents, each extended with a Knowledge Base containing EIA profiles for all states (e.g. <a href="https://www.eia.gov/state/print.php?sid=NH">New Hampshire</a>).
+                            <strong>AI Summaries & Recommendations:</strong> Generated using two AWS Bedrock Agents, each extended with a Knowledge Base containing EIA profiles for all states (e.g. <a href="https://www.eia.gov/state/print.php?sid=NH">New Hampshire</a>) The two agents are invoked by a Bedrock flow which decides which agent to use based on the GET request.
                         </li>
                         <li>
                             <strong>Caching:</strong> To optimize performance, AI responses for each state are cached in S3 and reused for subsequent requests.
@@ -85,7 +85,7 @@
                         <h4>Summary</h4>
                     </header>
                     <hgroup>
-                        <p id="summary">
+                        <p id="summarize">
                             </progress>
                         </p>
                     </hgroup>
@@ -95,7 +95,7 @@
                         <h4>AI Recommendation</h4>
                     </header>
                     <hgroup>
-                        <p id="recommendation">
+                        <p id="recommend">
                             </progress>
                         </p>
                     </hgroup>

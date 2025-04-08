@@ -1,11 +1,13 @@
-import os
-import uuid
+import io
 import json
+import os
+import csv
 
 import boto3
-import io
 
 CACHE_BUCKET = os.getenv('CACHE_BUCKET')
+FLOW_IDENTIFIER = os.getenv('FLOW_IDENTIFIER')
+FLOW_ALIAS = os.getenv('FLOW_ALIAS')
 
 state_abbrev_to_full = {
     'AL': 'Alabama',
@@ -63,96 +65,149 @@ state_abbrev_to_full = {
 
 def lambda_handler(event, context):
     try:
-        if 'state' not in event:
+        params = event['queryStringParameters']
+        if not params:
             return {
                 'statusCode': 400,
-                'body': 'state is required'
+                'body': json.dumps('Missing query parameters')
             }
-        if 'data' not in event:
+        invocation = params.get('invocation')
+        if not invocation:
             return {
                 'statusCode': 400,
-                'body': 'data is required'
+                'body': json.dumps('Missing invocation parameter')
             }
-        if 'id' not in event:
+        if invocation not in ['summarize', 'recommend']:
+            print(f'Invalid invocation parameter: {invocation}')
             return {
                 'statusCode': 400,
-                'body': 'id is required'
+                'body': json.dumps('Invalid invocation parameter')
             }
-        elif event['id'] not in ['summary', 'recommendation']:
+        state_abbr = params.get('state')
+        if not state_abbr:
             return {
                 'statusCode': 400,
-                'body': 'id is not valid'
+                'body': json.dumps('Missing state parameter')
             }
-        model_request_type  = event['id']
-        data = event['data']
-        state_abbr = event['state'].upper()
+        state_abbr = state_abbr.upper()
+        if  state_abbr not in state_abbrev_to_full:
+            print(f'Invalid state parameter: {state_abbr}')
+            return {
+                'statusCode': 400,
+                'body': json.dumps('Invalid state parameter')
+            }
         state_full = state_abbrev_to_full[state_abbr]
+        print(f'Input: invocation={invocation} state={state_abbr},{state_full}')
 
         s3 = boto3.client('s3', region_name='us-east-1')
-        if not state_is_cached(s3, state_abbr, model_request_type):
-            print(f'State {state_full} is not cached, getting new response for {model_request_type}')
-            info = get_new_response(state_full, data, model_request_type)
-            cache_response(s3, state_abbr, info, model_request_type)
+        if not state_is_cached(s3, state_abbr, invocation):
+            print(f'State {state_full} is not cached, getting new response for {invocation}')
+            data = get_data_from_s3(s3, state_abbr)
+            print(f'Data to provide the models: {data}')
+            response = get_new_response(state_full, invocation, data)
+            if not response:
+                return {
+                    'statusCode': 500,
+                    'body': json.dumps('Error receiving response from model')
+                }
+            cache_response(s3, state_abbr, response, invocation)
         else:
-            print(f'State {state_full} is cached, getting cached response for {model_request_type}')
-            info = get_cached_response(s3, state_abbr, model_request_type)
+            print(f'State {state_full} is cached, getting cached response for {invocation}')
+            response = get_cached_response(s3, state_abbr, invocation)
         return {
             'statusCode': 200,
-            'info': info,
+            'headers': {
+                'Access-Control-Allow-Origin': '*',
+                'Access-Control-Allow-Headers': 'Content-Type',
+                'Access-Control-Allow-Methods': 'OPTIONS,GET'
+            },
+            'body': json.dumps({
+                'info': response
+            }),
         }
     except Exception as e:
-        print(e)
+        print(f'Error: {e}')
         return {
             'statusCode': 500,
             'body': 'Internal error'
         }
 
-def state_is_cached(s3, state, path):
+def state_is_cached(s3, state, path) -> bool:
     key = f'{path}/{state}.txt'
     try:
+        print(f'Checking if {key} exists in {CACHE_BUCKET}')
         s3.head_object(Bucket=CACHE_BUCKET, Key=key)
         return True
     except Exception:
         return False
 
-def get_cached_response(s3, state, path):
+def get_cached_response(s3, state, path) -> str:
     key = f'{path}/{state}.txt'
+    try:
+        print(f'Getting cached response for {key} in {CACHE_BUCKET}')
+        response = s3.get_object(Bucket=CACHE_BUCKET, Key=key)
+        data = response['Body'].read().decode('utf-8')
+        print(f'Cached response: {data}')
+        return data
+    except Exception as e:
+        print(f'Error decoding s3 object: {e}')
+        return 'Error'
+
+def cache_response(s3, state, data, path) -> None:
+    key = f'{path}/{state}.txt'
+    print(f'Caching response for {key} in {CACHE_BUCKET}')
+    s3.upload_fileobj(io.BytesIO(data.encode('utf-8')), CACHE_BUCKET, key)
+
+def csv_to_dict(file_input):
+    result_dict = {}
+    csv_reader = csv.DictReader(file_input)
+    first_column = csv_reader.fieldnames[0]
+    for row in csv_reader:
+        key = row[first_column]
+        result_dict[key] = row
+
+    return result_dict
+
+def get_data_from_s3(s3, state_abbr) -> dict:
+    key = 'energy-by-state-and-type.csv'
+    print(f'Getting data from {key} in {CACHE_BUCKET}')
     response = s3.get_object(Bucket=CACHE_BUCKET, Key=key)
-    return response['Body'].read().decode('utf-8')
+    csv_string = response['Body'].read().decode('utf-8')
+    data = csv_to_dict(io.StringIO(csv_string))
+    return data[state_abbr]
 
-def cache_response(s3, state, data, path):
-    key = f'{path}/{state}.txt'
-    bytes = io.BytesIO(data.encode('utf-8'))
-    s3.upload_fileobj(bytes, CACHE_BUCKET, key)
-
-
-def get_agent_info(model_request_type):
-    return os.getenv(f'{model_request_type.upper()}_AGENT'), os.getenv(f'{model_request_type.upper()}_ALIAS')
-
-
-def get_new_response(state_full, data, model_request_type):
+def get_new_response(state_full, invocation, data):
     bedrock = boto3.client('bedrock-agent-runtime', region_name='us-east-1')
-    agent_id, alias_id = get_agent_info(model_request_type)
-    print(f'Invoking model for {model_request_type} for {state_full} with agent ({agent_id}) and alias ({alias_id})')
-    if model_request_type == 'summary':
-        prompt = (f'Write a 5-10 sentence summary for {state_full}. Reference information about the states profile. Only '
-                  f'reference the numbers in {json.dumps(data)}')
-    else:
-        prompt = (f'Write a 5-10 sentence summary for {state_full} and recommendations of how the state can move towards '
-                  f'renewable resources for energy production and consumption. Reference the states profile to better'
-                  f'understand the current geography, climate, and resources. Reference the information in '
-                  f'{json.dumps(data)} as well when talking about specific numbers of current production and '
-                  f'consumption')
-    response = bedrock.invoke_agent(
-        agentId=agent_id,
-        agentAliasId=alias_id,
-        sessionId=f'{str(uuid.uuid4())[0:8]}',
-        inputText=prompt
+    print(f'Invoking flow for {invocation} of {state_full}, flow_id={FLOW_IDENTIFIER}, flow_alias={FLOW_ALIAS}')
+    prompt = f"""
+        Invocation: {invocation}
+        State: {state_full}
+        Data: {data}
+    """
+    print(f'Prompt: {prompt}')
+    response = bedrock.invoke_flow(
+        enableTrace=True,
+        flowIdentifier=FLOW_IDENTIFIER,
+        flowAliasIdentifier=FLOW_ALIAS,
+        inputs=[
+            {
+                'content': {
+                    'document': prompt
+                },
+                'nodeName': 'FlowInputNode',
+                'nodeOutputName': 'document'
+            },
+        ],
     )
-
     # Wait for response through Boto3 EventStream https://botocore.amazonaws.com/v1/documentation/api/latest/reference/eventstream.html
-    for event in response['completion']:
-        print(event)
+    for event in response['responseStream']:
         if event:
-            return event['chunk']['bytes'].decode('utf-8')
+            print(f'Received event: {event}')
+            if 'flowOutputEvent' in event:
+                print('Received a flowOutputEvent')
+                output_event = event['flowOutputEvent']['content']
+                document = output_event['document']
+                print(f'Received document: {document}')
+                return document
+
     return None
